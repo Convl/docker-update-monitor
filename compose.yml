@@ -8,9 +8,9 @@ services:
       - "3306:3306"
     labels:
       - "diun.enable=true"
-      # - "diun.watch_repo=true"
-      # - "diun.sort_tags=semver"
-      # - "diun.max_tags=1" 
+      - "diun.watch_repo=true"
+      - "diun.sort_tags=semver"
+      - "diun.max_tags=1" 
 
   nginx:
     image: nginx:1.28
@@ -18,9 +18,9 @@ services:
       - "8080:80"
     labels:
       - "diun.enable=true"
-      # - "diun.watch_repo=true"
-      # - "diun.sort_tags=semver"
-      # - "diun.max_tags=1"
+      - "diun.watch_repo=true"
+      - "diun.sort_tags=semver"
+      - "diun.max_tags=1"
 
   redis:
     image: redis:7.2
@@ -28,6 +28,6 @@ services:
       - "6379:6379"
     labels:
       - "diun.enable=true"
-      # - "diun.watch_repo=true"        
-      # - "diun.sort_tags=semver"       
-      # - "diun.max_tags=1"          
+      - "diun.watch_repo=true"        
+      - "diun.sort_tags=semver"       
+      - "diun.max_tags=1"          

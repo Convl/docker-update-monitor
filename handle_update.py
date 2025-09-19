@@ -198,11 +198,11 @@ def create_cve_tables(
         if not uids:
             return None
         table = Table(title=title, show_header=True)
-        table.add_column("CVE ID", style="white", width=15)
-        table.add_column("Package", style="white", width=15)
-        table.add_column("Severity", width=8)
-        table.add_column("Title", style="white", width=22)
-        table.add_column("Description", style="white", width=60)
+        table.add_column("CVE ID", style="white", overflow="fold", width=18)
+        table.add_column("Package", style="white", overflow="fold", width=13)
+        table.add_column("Severity", overflow="fold", width=14)
+        table.add_column("Title", style="white", overflow="fold", width=22)
+        table.add_column("Description", style="white", overflow="fold", width=53)
 
         sorted_uids = sorted(uids, key=lambda uid: (get_severity_order(cves[uid].severity), uid))
         for uid in sorted_uids:
