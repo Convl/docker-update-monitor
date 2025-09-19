@@ -30,6 +30,7 @@ MAIL_PORT = int(os.environ.get("MAIL_PORT", "587"))
 class UpdateNotification:
     """Structured update information from Diun environment variables."""
 
+    status: str
     image: str
     hub_link: str
     digest: str
@@ -44,6 +45,7 @@ class UpdateNotification:
     @classmethod
     def from_environment(cls) -> "UpdateNotification":
         return cls(
+            status=os.environ.get("DIUN_ENTRY_STATUS"),
             image=os.environ.get("DIUN_ENTRY_IMAGE"),
             hub_link=os.environ.get("DIUN_ENTRY_HUBLINK"),
             digest=os.environ.get("DIUN_ENTRY_DIGEST"),
@@ -129,7 +131,11 @@ def get_severity_order(severity: str) -> int:
 
 
 def create_comparison_table(
-    current_info: ImageInfo, update_info: ImageInfo, current_cves: dict[str, CVEInfo], update_cves: dict[str, CVEInfo]
+    status: str,
+    current_info: ImageInfo,
+    update_info: ImageInfo,
+    current_cves: dict[str, CVEInfo],
+    update_cves: dict[str, CVEInfo],
 ) -> str:
     from rich.terminal_theme import MONOKAI
 
@@ -141,7 +147,14 @@ def create_comparison_table(
     update_text = Text(f"Updated Image:", style="green") + Text(
         f"{update_info.image} (created at: {update_info.created}, digest: {update_info.digest})", style="white"
     )
-    console.print("########## UPDATE DETECTED ##########")
+    intro = (
+        "########## UPDATE DETECTED ##########"
+        if status == "update"
+        else "########## NEW VERSION DETECTED ##########"
+        if status == "new"
+        else "######UNKNOWN STATUS##########"
+    )
+    console.print(intro)
     console.print(current_text)
     console.print(update_text)
     console.print()
@@ -256,7 +269,7 @@ def main():
             current_info = get_current_container_infos(notification.container_id)
             current_cves = scan_with_trivy(current_info.image, "docker")
 
-            html_report = create_comparison_table(current_info, update_info, current_cves, update_cves)
+            html_report = create_comparison_table(notification.status, current_info, update_info, current_cves, update_cves)
             notify_by_email(html_report)
 
             # Save HTML report for debugging
