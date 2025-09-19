@@ -8,9 +8,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
-from rich.console import Console
+from langchain_core.output_parsers import PydanticOutputParser
+from langchain_openai import ChatOpenAI
+from pydantic import BaseModel, Field
+from rich.console import Console, Group
+from rich.panel import Panel
 from rich.table import Table
-from rich.terminal_theme import DIMMED_MONOKAI
+from rich.terminal_theme import MONOKAI
 from rich.text import Text
 
 TRIVY_NEEDS_DOCKER = False
@@ -24,6 +28,14 @@ MAIL_FROM = os.environ.get("MAIL_FROM")
 MAIL_PASSWORD = os.environ.get("MAIL_PASSWORD")
 MAIL_SERVER = os.environ.get("MAIL_SERVER", "smtp.gmail.com")
 MAIL_PORT = int(os.environ.get("MAIL_PORT", "587"))
+
+
+class CVEAnalysis(BaseModel):
+    security_impact: str = Field(description="One sentence describing overall security impact")
+    recommendation: str = Field(
+        description="One of: 'Update immediately', 'Update when convenient', 'Consider the trade-offs'"
+    )
+    reasoning: str = Field(description="1-2 sentences explaining the recommendation, focusing on practical impact")
 
 
 @dataclass
@@ -130,34 +142,23 @@ def get_severity_order(severity: str) -> int:
     return order.get(severity, 99)
 
 
-def create_comparison_table(
-    status: str,
+def create_cve_tables(
     current_info: ImageInfo,
     update_info: ImageInfo,
     current_cves: dict[str, CVEInfo],
     update_cves: dict[str, CVEInfo],
-) -> str:
-    from rich.terminal_theme import MONOKAI
+) -> Group:
+    """Create CVE comparison tables as Rich renderables."""
+    tables = []
 
-    console = Console(record=True, width=120)
-
-    current_text = Text(f"Current Image:", style="magenta") + Text(
-        f"{current_info.image} (created at: {current_info.created}, digest: {current_info.digest})", style="white"
+    # Image info
+    current_text = Text("Current Image:", style="magenta") + Text(
+        f" {current_info.image} (created at: {current_info.created}, digest: {current_info.digest})", style="white"
     )
-    update_text = Text(f"Updated Image:", style="green") + Text(
-        f"{update_info.image} (created at: {update_info.created}, digest: {update_info.digest})", style="white"
+    update_text = Text("Updated Image:", style="green") + Text(
+        f" {update_info.image} (created at: {update_info.created}, digest: {update_info.digest})", style="white"
     )
-    intro = (
-        "########## UPDATE DETECTED ##########"
-        if status == "update"
-        else "########## NEW VERSION DETECTED ##########"
-        if status == "new"
-        else "######UNKNOWN STATUS##########"
-    )
-    console.print(intro)
-    console.print(current_text)
-    console.print(update_text)
-    console.print()
+    tables.extend([current_text, update_text, ""])
 
     # Summary table
     summary_table = Table(title="🔒 Security Vulnerability Comparison Summary", show_header=True)
@@ -190,11 +191,12 @@ def create_comparison_table(
         change_text = Text(f"{change:+d}", style="green" if change < 0 else "red" if change > 0 else "white")
         summary_table.add_row(f"{severity} CVEs", str(current), str(updated), change_text)
 
-    console.print(summary_table)
-    console.print()
+    tables.extend([summary_table, ""])
 
-    # Tables for new, fixed and common CVEs
-    def display_cve_table(uids: set[str], cves: dict[str, CVEInfo], title: str):
+    # Helper function to create fixed/new/unchanged CVE tables
+    def create_cve_table(uids: set[str], cves: dict[str, CVEInfo], title: str):
+        if not uids:
+            return None
         table = Table(title=title, show_header=True)
         table.add_column("CVE ID", style="white", width=15)
         table.add_column("Package", style="white", width=15)
@@ -208,8 +210,7 @@ def create_comparison_table(
             title = cve.title
             severity_text = Text(cve.severity, style=get_severity_color(cve.severity))
             table.add_row(cve.id, cve.pkg_name, severity_text, title, cve.description)
-        console.print(table)
-        console.print()
+        return table
 
     current_uids = set(current_cves.keys())
     update_uids = set(update_cves.keys())
@@ -218,17 +219,34 @@ def create_comparison_table(
     new_cves = update_uids - current_uids
     common_cves = current_uids & update_uids
 
-    if fixed_cves:
-        display_cve_table(fixed_cves, current_cves, "✅ Fixed Vulnerabilities")
+    # Add CVE tables
+    for uids, cves, title in [
+        (fixed_cves, current_cves, "✅ Fixed Vulnerabilities"),
+        (new_cves, update_cves, "⚠️  New Vulnerabilities"),
+        (common_cves, current_cves, "🔄 Unchanged Vulnerabilities"),
+    ]:
+        if table := create_cve_table(uids, cves, title):
+            tables.extend([table, ""])
 
-    if new_cves:
-        display_cve_table(new_cves, update_cves, "⚠️  New Vulnerabilities")
+    return Group(*tables)
 
-    if common_cves:
-        display_cve_table(common_cves, current_cves, "🔄 Unchanged Vulnerabilities")
 
-    # Export HTML with dark theme
-    return console.export_html(theme=MONOKAI)
+def analyze_cve_report(cve_report_text: str, model: str = "gpt-4o-mini") -> CVEAnalysis:
+    """Analyze CVE report using structured output."""
+    parser = PydanticOutputParser(pydantic_object=CVEAnalysis)
+    llm = ChatOpenAI(model=model, temperature=0)
+
+    prompt = f"""Analyze this container security vulnerability report.
+
+{parser.get_format_instructions()}
+
+Report to analyze:
+{cve_report_text}
+
+Focus on practical impact for system administrators."""
+
+    response = llm.invoke(prompt)
+    return parser.parse(response.content)
 
 
 def notify_by_email(html_report: str, subject: str = "Docker Image Update Notification"):
@@ -262,14 +280,37 @@ def main():
         try:
             load_dotenv()
 
+            # Get infos from diun
             notification = UpdateNotification.from_environment()
+
+            # Scan updated and current images
             update_info = ImageInfo.from_notification(notification)
             update_cves = scan_with_trivy(update_info.image, "remote")
-
             current_info = get_current_container_infos(notification.container_id)
             current_cves = scan_with_trivy(current_info.image, "docker")
 
-            html_report = create_comparison_table(notification.status, current_info, update_info, current_cves, update_cves)
+            # Create CVE tables 
+            cve_tables = create_cve_tables(
+                current_info, update_info, current_cves, update_cves
+            )
+            
+            # Convert to text for the AI
+            console = Console(record=True, width=120)
+            console.print(cve_tables)
+            cve_text = console.export_text()
+
+            # Get AI analysis
+            ai_analysis = analyze_cve_report(cve_text)
+
+            # Combine AI analysis with CVE tables
+            ai_content = Text("Security Impact: ", style="bold blue") + Text(f"{ai_analysis.security_impact}\n", style="white") + Text("Recommendation: ", style="bold blue") + Text(f"{ai_analysis.recommendation}\n", style="white") + Text("Reasoning: ", style="bold blue") + Text(f"{ai_analysis.reasoning}\n", style="white")
+            ai_panel = Panel(ai_content, title="🤖 AI Analysis & Recommendation", border_style="blue")
+            report = Group(ai_panel, "", cve_tables)
+
+            # Generate final HTML
+            console.clear()
+            console.print(report)
+            html_report = console.export_html(theme=MONOKAI)
             notify_by_email(html_report)
 
             # Save HTML report for debugging
@@ -283,8 +324,4 @@ def main():
 
 
 if __name__ == "__main__":
-    if not os.environ.get("DIUN_ENTRY_STATUS"):
-        # simulate diun notification for testing purposes
-        test_env = json.load(open("scripts/logs/test_env.jsonl"))
-        os.environ.update(test_env)
     main()
