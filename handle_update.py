@@ -23,7 +23,7 @@ TRIVY_NEEDS_DOCKER = False
 load_dotenv()
 
 # Email configuration
-MAIL_TO = "cvanlijnden@gmail.com"
+MAIL_TO = os.environ.get("MAIL_TO")
 MAIL_FROM = os.environ.get("MAIL_FROM")
 MAIL_PASSWORD = os.environ.get("MAIL_PASSWORD")
 MAIL_SERVER = os.environ.get("MAIL_SERVER", "smtp.gmail.com")
@@ -289,11 +289,9 @@ def main():
             current_info = get_current_container_infos(notification.container_id)
             current_cves = scan_with_trivy(current_info.image, "docker")
 
-            # Create CVE tables 
-            cve_tables = create_cve_tables(
-                current_info, update_info, current_cves, update_cves
-            )
-            
+            # Create CVE tables
+            cve_tables = create_cve_tables(current_info, update_info, current_cves, update_cves)
+
             # Convert to text for the AI
             console = Console(record=True, width=120)
             console.print(cve_tables)
@@ -303,7 +301,14 @@ def main():
             ai_analysis = analyze_cve_report(cve_text)
 
             # Combine AI analysis with CVE tables
-            ai_content = Text("Security Impact: ", style="bold blue") + Text(f"{ai_analysis.security_impact}\n", style="white") + Text("Recommendation: ", style="bold blue") + Text(f"{ai_analysis.recommendation}\n", style="white") + Text("Reasoning: ", style="bold blue") + Text(f"{ai_analysis.reasoning}\n", style="white")
+            ai_content = (
+                Text("Security Impact: ", style="bold blue")
+                + Text(f"{ai_analysis.security_impact}\n", style="white")
+                + Text("Recommendation: ", style="bold blue")
+                + Text(f"{ai_analysis.recommendation}\n", style="white")
+                + Text("Reasoning: ", style="bold blue")
+                + Text(f"{ai_analysis.reasoning}\n", style="white")
+            )
             ai_panel = Panel(ai_content, title="🤖 AI Analysis & Recommendation", border_style="blue")
             report = Group(ai_panel, "", cve_tables)
 
